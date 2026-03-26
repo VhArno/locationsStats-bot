@@ -5,7 +5,6 @@ const csv = require('csv-parser');
 const { simpleParser } = require('mailparser');
 const { Client, LocalAuth } = require("whatsapp-web.js");
 const { ImapFlow } = require('imapflow');
-const fs = require('fs');
 const { Readable } = require('stream');
 
 dotenv.config();
@@ -42,7 +41,7 @@ client.on("ready", () => {
 // HELPERS
 // ─────────────────────────────────────────────
 
-const SUFFIXES = ['NPL', 'Vriendenloterij', 'DPG'];
+const SUFFIXES = ['NPL', 'Vriendenloterij', 'DPG', 'VriendenLoterij'];
 const normalizeKey = (value) => {
   if (typeof value !== 'string') return '';
   let key = value.trim();
@@ -61,8 +60,6 @@ const addToTotals = (name, amount) => {
     totals[key] = (totals[key] || 0) + amount;
 };
 
-// Replace your sendSummary and processNewEmails with these debug versions temporarily:
-
 const sendSummary = async () => {
     const entries = Object.entries(totals)
         .map(([name, total]) => ({ name, total }))
@@ -77,7 +74,6 @@ const sendSummary = async () => {
     const message = `🏆 *Leaderboard*\n${lines.join('\n')}`;
 
     const chats = await client.getChats();
-
     const group = chats.find((c) => c.isGroup && c.name === GROUP_NAME);
     if (!group) {
         console.log(`❌ WhatsApp group '${GROUP_NAME}' not found.`);
@@ -105,22 +101,24 @@ async function processNewEmails(imap) {
         return;
     }
 
-    console.log(`📬 Found ${uids.length} unread email(s) to process.`);
+    // Only take the last (most recent) email
+    const lastUid = [uids[uids.length - 1]];
+    console.log(`📬 Processing most recent email (${uids.length} unread total).`);
+
+    // Clear totals so we show only the data from this email
+    Object.keys(totals).forEach((k) => delete totals[k]);
+
     let gotNewData = false;
 
-    for await (const message of imap.fetch(uids, { source: true })) {
+    for await (const message of imap.fetch(lastUid, { source: true })) {
         const parsed = await simpleParser(message.source);
         console.log(`📧 Processing: '${parsed.subject}'`);
 
         if (!parsed.attachments || parsed.attachments.length === 0) {
             console.log('No attachments found.');
         } else {
-            fs.mkdirSync('./attachments', { recursive: true });
-
             for (const attachment of parsed.attachments) {
                 if (attachment.contentType && attachment.contentType.startsWith('image/')) continue;
-
-                fs.writeFileSync('./attachments/location_data.csv', attachment.content);
 
                 try {
                     const rows = await parseCsvBuffer(attachment.content);
@@ -132,6 +130,7 @@ async function processNewEmails(imap) {
                             gotNewData = true;
                         }
                     });
+                    console.log(`✅ Parsed ${rows.length} rows from ${attachment.filename}`);
                 } catch (ex) {
                     console.error('Failed to parse CSV:', attachment.filename, ex);
                 }
@@ -170,22 +169,21 @@ async function getEmails() {
             const lock = await imap.getMailboxLock('INBOX');
 
             try {
-                // Process any unread emails that arrived before bot started
+                // Process most recent unread email on startup
                 await processNewEmails(imap);
 
-                // Wait for new mail notification, then process, repeat
                 while (true) {
-                    // Wait until the server signals a new message exists
                     await new Promise((resolve, reject) => {
                         imap.once('exists', resolve);
                         imap.once('error', reject);
                         imap.idle().catch(reject);
                     });
 
+                    console.log('📩 New message detected, checking inbox...');
                     try {
-                      await processNewEmails(imap);
+                        await processNewEmails(imap);
                     } catch (ex) {
-                      console.error('Error processing email:', ex.message);
+                        console.error('Error processing email:', ex.message);
                     }
                 }
 
