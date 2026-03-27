@@ -18,13 +18,21 @@ const GROUP_NAME = "Test: WA Rankings";
 const TIMEZONE = process.env.TIMEZONE || 'UTC';
 const totals = {};
 
+const excluding = ['Amsterdam_4'];
+
 // ─────────────────────────────────────────────
 // WHATSAPP CLIENT
 // ─────────────────────────────────────────────
 
 const client = new Client({
-  authStrategy: new LocalAuth(),
-  puppeteer: { args: ["--no-sandbox"] },
+    authStrategy: new LocalAuth({
+        clientId: "bot-1",
+        dataPath: "./sessions"
+    }),
+    puppeteer: { 
+        executablePath: '/usr/bin/chromium-browser', 
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+    },
 });
 
 client.on("qr", (qr) => {
@@ -62,6 +70,7 @@ const addToTotals = (name, amount) => {
 
 const sendSummary = async () => {
     const entries = Object.entries(totals)
+        .filter(([name, total]) => !excluding.includes(name))
         .map(([name, total]) => ({ name, total }))
         .sort((a, b) => b.total - a.total);
 
