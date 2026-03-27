@@ -26,8 +26,8 @@ const excluding = ['Amsterdam_4'];
 
 const client = new Client({
     authStrategy: new LocalAuth({
-        clientId: "bot-1",
-        dataPath: "./sessions"
+        clientId: "locations", 
+        dataPath: "./sessions-locations"
     }),
     puppeteer: { 
         executablePath: '/usr/bin/chromium-browser', 
