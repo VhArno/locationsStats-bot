@@ -80,7 +80,9 @@ const sendSummary = async () => {
     }
 
     const lines = entries.map((row, idx) => `${idx + 1}. ${row.name}: ${row.total}`);
-    const message = `🏆 *Leaderboard*\n${lines.join('\n')}`;
+    const total = entries.map((row) => row.total)
+
+    const message = `🏆 *Leaderboard*\n${lines.join('\n')}\n🔥*Total:*${total}`;
 
     const chats = await client.getChats();
     const group = chats.find((c) => c.isGroup && c.name === GROUP_NAME);
