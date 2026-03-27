@@ -80,7 +80,7 @@ const sendSummary = async () => {
     }
 
     const lines = entries.map((row, idx) => `${idx + 1}. ${row.name}: ${row.total}`);
-    const total = entries.map((row) => row.total)
+    const total = entries.reduce((sum, row) => sum + row.total, 0);
 
     const message = `🏆 *Leaderboard*\n${lines.join('\n')}\n🔥*Total:*${total}`;
 
