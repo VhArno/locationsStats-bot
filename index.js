@@ -29,7 +29,10 @@ const client = new Client({
         clientId: "locations",
         dataPath: "./sessions-locations"
     }),
-    puppeteer: { args: ["--no-sandbox"] },
+    puppeteer: {
+        executablePath: '/usr/bin/chromium-browser',
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+    },
 });
 
 client.on("qr", (qr) => {
