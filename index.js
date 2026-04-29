@@ -16,9 +16,9 @@ dotenv.config();
 const DEDICATED_EMAIL = process.env.DEDICATED_EMAIL_SENDER;
 const GROUP_NAME = "Test: WA Rankings";
 const TIMEZONE = process.env.TIMEZONE || 'UTC';
-const totals = {};
 
-const excluding = ['Amsterdam_4'];
+// Locations to exclude from the leaderboard
+const EXCLUDING = [];
 
 // ─────────────────────────────────────────────
 // WHATSAPP CLIENT
@@ -26,40 +26,40 @@ const excluding = ['Amsterdam_4'];
 
 const client = new Client({
     authStrategy: new LocalAuth({
-        clientId: "locations", 
+        clientId: "locations",
         dataPath: "./sessions-locations"
     }),
-    puppeteer: { 
-        executablePath: '/usr/bin/chromium-browser', 
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
-    },
+    puppeteer: { args: ["--no-sandbox"] },
 });
 
 client.on("qr", (qr) => {
-  console.log("📱 Scan this QR code with your spare WhatsApp number:\n");
-  qrcode.generate(qr, { small: true });
+    console.log("📱 Scan this QR code with your spare WhatsApp number:\n");
+    qrcode.generate(qr, { small: true });
 });
 
 client.on("ready", () => {
-  console.log("✅ Bot is ready!");
-  getEmails();
+    console.log("✅ Bot is ready!");
+    // Check immediately on startup for the most recent email
+    checkEmails();
 });
 
 // ─────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────
 
-const SUFFIXES = ['NPL', 'Vriendenloterij', 'DPG', 'VriendenLoterij'];
+const totals = {};
+
+const SUFFIXES = ['NPL', 'Vriendenloterij', 'VriendenLoterij', 'DPG'];
 const normalizeKey = (value) => {
-  if (typeof value !== 'string') return '';
-  let key = value.trim();
-  for (const suffix of SUFFIXES) {
-    if (key.endsWith(' ' + suffix)) {
-      key = key.slice(0, -(suffix.length + 1)).trim();
-      break;
+    if (typeof value !== 'string') return '';
+    let key = value.trim();
+    for (const suffix of SUFFIXES) {
+        if (key.endsWith(' ' + suffix)) {
+            key = key.slice(0, -(suffix.length + 1)).trim();
+            break;
+        }
     }
-  }
-  return key;
+    return key;
 };
 
 const addToTotals = (name, amount) => {
@@ -70,7 +70,7 @@ const addToTotals = (name, amount) => {
 
 const sendSummary = async () => {
     const entries = Object.entries(totals)
-        .filter(([name, total]) => !excluding.includes(name))
+        .filter(([name]) => !EXCLUDING.includes(name))
         .map(([name, total]) => ({ name, total }))
         .sort((a, b) => b.total - a.total);
 
@@ -81,7 +81,6 @@ const sendSummary = async () => {
 
     const lines = entries.map((row, idx) => `${idx + 1}. ${row.name}: ${row.total}`);
     const total = entries.reduce((sum, row) => sum + row.total, 0);
-
     const message = `🏆 *Leaderboard*\n${lines.join('\n')}\n🔥 *Total:* ${total}`;
 
     const chats = await client.getChats();
@@ -155,62 +154,38 @@ async function processNewEmails(imap) {
     if (gotNewData) await sendSummary();
 }
 
-// ─────────────────────────────────────────────
-// REAL-TIME EMAIL LISTENER (IMAPFLOW IDLE)
-// ─────────────────────────────────────────────
+async function checkEmails() {
+    console.log('⏰ Checking for new emails...');
 
-async function getEmails() {
-    while (true) {
-        const imap = new ImapFlow({
-            host: process.env.GMAIL_HOST,
-            port: 993,
-            secure: true,
-            auth: {
-                user: process.env.GMAIL_ADDRESS,
-                pass: process.env.GMAIL_APP_PASSWORD,
-            },
-            tls: { rejectUnauthorized: false },
-            logger: false,
-        });
+    const imap = new ImapFlow({
+        host: process.env.GMAIL_HOST,
+        port: 993,
+        secure: true,
+        auth: {
+            user: process.env.GMAIL_ADDRESS,
+            pass: process.env.GMAIL_APP_PASSWORD,
+        },
+        tls: { rejectUnauthorized: false },
+        logger: false,
+    });
 
-        try {
-            await imap.connect();
-            console.log('📭 Connected to mailbox, waiting for new emails...');
-
-            const lock = await imap.getMailboxLock('INBOX');
-
-            try {
-                // Process most recent unread email on startup
-                await processNewEmails(imap);
-
-                while (true) {
-                    await new Promise((resolve, reject) => {
-                        imap.once('exists', resolve);
-                        imap.once('error', reject);
-                        imap.idle().catch(reject);
-                    });
-
-                    console.log('📩 New message detected, checking inbox...');
-                    try {
-                        await processNewEmails(imap);
-                    } catch (ex) {
-                        console.error('Error processing email:', ex.message);
-                    }
-                }
-
-            } finally {
-                lock.release();
-            }
-
-        } catch (ex) {
-            console.error(`IMAP error (${ex.code || ex.message}), reconnecting in 5s...`);
-        } finally {
-            try { await imap.logout(); } catch (_) {}
-        }
-
-        await new Promise(res => setTimeout(res, 5000));
+    try {
+        await imap.connect();
+        await imap.mailboxOpen('INBOX');
+        await processNewEmails(imap);
+    } catch (err) {
+        console.error('Error checking emails:', err);
+    } finally {
+        await imap.logout().catch(() => {});
     }
 }
+
+// ─────────────────────────────────────────────
+// SCHEDULING
+// emails arrive at :00 and :30 → check at :05 and :35
+// ─────────────────────────────────────────────
+
+cron.schedule('5,35 * * * *', checkEmails, { timezone: TIMEZONE });
 
 // ─────────────────────────────────────────────
 // MIDNIGHT RESET
