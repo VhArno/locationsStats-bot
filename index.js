@@ -31,7 +31,7 @@ const client = new Client({
         dataPath: "./sessions-locations"
     }),
     puppeteer: {
-        // executablePath: '/usr/bin/chromium-browser',
+        executablePath: '/usr/bin/chromium-browser',
         args: ['--no-sandbox', '--disable-setuid-sandbox']
     },
 });
@@ -230,7 +230,7 @@ function checkEmails() {
 // emails arrive at :00 and :30 → check at :05 and :35
 // ─────────────────────────────────────────────
 
-cron.schedule('5,35 * * * *', checkEmails, { timezone: TIMEZONE });
+cron.schedule('2,32 * * * *', checkEmails, { timezone: TIMEZONE });
 
 // ─────────────────────────────────────────────
 // MIDNIGHT RESET
