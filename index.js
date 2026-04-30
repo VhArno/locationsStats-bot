@@ -4,7 +4,7 @@ const qrcode = require("qrcode-terminal");
 const csv = require('csv-parser');
 const { simpleParser } = require('mailparser');
 const { Client, LocalAuth } = require("whatsapp-web.js");
-const { ImapFlow } = require('imapflow');
+const Imap = require('imap');
 const { Readable } = require('stream');
 
 dotenv.config();
@@ -20,6 +20,7 @@ const TIMEZONE = process.env.TIMEZONE || 'UTC';
 // Locations to exclude from the leaderboard
 const EXCLUDING = [];
 
+
 // ─────────────────────────────────────────────
 // WHATSAPP CLIENT
 // ─────────────────────────────────────────────
@@ -30,7 +31,7 @@ const client = new Client({
         dataPath: "./sessions-locations"
     }),
     puppeteer: {
-        executablePath: '/usr/bin/chromium-browser',
+        // executablePath: '/usr/bin/chromium-browser',
         args: ['--no-sandbox', '--disable-setuid-sandbox']
     },
 });
@@ -106,81 +107,122 @@ const parseCsvBuffer = (buffer) => new Promise((resolve, reject) => {
         .on('error', reject);
 });
 
-async function processNewEmails(imap) {
-    const uids = await imap.search({ seen: false, from: DEDICATED_EMAIL });
+function checkEmails() {
+    return new Promise((resolve) => {
+        console.log('⏰ Checking for new emails...');
 
-    if (!uids || uids.length === 0) {
-        console.log('No matching unseen emails from dedicated sender.');
-        return;
-    }
-
-    // Only take the last (most recent) email
-    const lastUid = [uids[uids.length - 1]];
-    console.log(`📬 Processing most recent email (${uids.length} unread total).`);
-
-    // Clear totals so we show only the data from this email
-    Object.keys(totals).forEach((k) => delete totals[k]);
-
-    let gotNewData = false;
-
-    for await (const message of imap.fetch(lastUid, { source: true })) {
-        const parsed = await simpleParser(message.source);
-        console.log(`📧 Processing: '${parsed.subject}'`);
-
-        if (!parsed.attachments || parsed.attachments.length === 0) {
-            console.log('No attachments found.');
-        } else {
-            for (const attachment of parsed.attachments) {
-                if (attachment.contentType && attachment.contentType.startsWith('image/')) continue;
-
-                try {
-                    const rows = await parseCsvBuffer(attachment.content);
-                    rows.forEach((row) => {
-                        const name = row.Location_employee;
-                        const total = Number(row.Total);
-                        if (name && !Number.isNaN(total)) {
-                            addToTotals(name, total);
-                            gotNewData = true;
-                        }
-                    });
-                    console.log(`✅ Parsed ${rows.length} rows from ${attachment.filename}`);
-                } catch (ex) {
-                    console.error('Failed to parse CSV:', attachment.filename, ex);
-                }
-            }
-        }
-
-        imap.messageFlagsAdd(message.uid, ['\\Seen'], { uid: true }).catch(() => {});
-        console.log('📬 Marked as read.');
-    }
-
-    if (gotNewData) await sendSummary();
-}
-
-async function checkEmails() {
-    console.log('⏰ Checking for new emails...');
-
-    const imap = new ImapFlow({
-        host: process.env.GMAIL_HOST,
-        port: 993,
-        secure: true,
-        auth: {
+        const imap = new Imap({
             user: process.env.GMAIL_ADDRESS,
-            pass: process.env.GMAIL_APP_PASSWORD,
-        },
-        tls: { rejectUnauthorized: false },
-        logger: false,
-    });
+            password: process.env.GMAIL_APP_PASSWORD,
+            host: process.env.GMAIL_HOST,
+            port: 993,
+            tls: true,
+            tlsOptions: { rejectUnauthorized: false },
+        });
 
-    try {
-        await imap.connect();
-        await imap.mailboxOpen('INBOX');
-        await processNewEmails(imap);
-    } catch (err) {
-        console.error('Error checking emails:', err);
-    } finally {
-        await imap.logout().catch(() => {});
-    }
+        imap.once('error', (err) => {
+            console.error('IMAP connection error:', err);
+            resolve();
+        });
+
+        imap.once('ready', () => {
+            imap.openBox('INBOX', false, (err) => {
+                if (err) {
+                    console.error('Error opening inbox:', err);
+                    imap.end();
+                    return resolve();
+                }
+
+                imap.search(['UNSEEN', ['FROM', DEDICATED_EMAIL]], (err, uids) => {
+                    if (err) {
+                        console.error('Search error:', err);
+                        imap.end();
+                        return resolve();
+                    }
+
+                    if (!uids || uids.length === 0) {
+                        console.log('No matching unseen emails from dedicated sender.');
+                        imap.end();
+                        return resolve();
+                    }
+
+                    const lastUid = uids[uids.length - 1];
+                    console.log(`📬 Processing most recent email (${uids.length} unread total).`);
+
+                    Object.keys(totals).forEach((k) => delete totals[k]);
+
+                    let gotNewData = false;
+                    const f = imap.fetch([lastUid], { bodies: '' });
+                    const messagePromises = [];
+
+                    f.on('message', (msg) => {
+                        const chunks = [];
+                        let uid;
+
+                        msg.on('body', (stream) => {
+                            stream.on('data', (chunk) => chunks.push(chunk));
+                        });
+
+                        msg.once('attributes', (attrs) => {
+                            uid = attrs.uid;
+                        });
+
+                        const msgPromise = new Promise((msgResolve) => {
+                            msg.once('end', async () => {
+                                try {
+                                    const raw = Buffer.concat(chunks);
+                                    const parsed = await simpleParser(raw);
+                                    console.log(`📧 Processing: '${parsed.subject}'`);
+
+                                    if (!parsed.attachments || parsed.attachments.length === 0) {
+                                        console.log('No attachments found.');
+                                    } else {
+                                        for (const attachment of parsed.attachments) {
+                                            if (attachment.contentType?.startsWith('image/')) continue;
+                                            try {
+                                                const rows = await parseCsvBuffer(attachment.content);
+                                                rows.forEach((row) => {
+                                                    const name = row.Location_employee;
+                                                    const total = Number(row.Total);
+                                                    if (name && !Number.isNaN(total)) {
+                                                        addToTotals(name, total);
+                                                        gotNewData = true;
+                                                    }
+                                                });
+                                                console.log(`✅ Parsed ${rows.length} rows from ${attachment.filename}`);
+                                            } catch (ex) {
+                                                console.error('Failed to parse CSV:', attachment.filename, ex);
+                                            }
+                                        }
+                                    }
+
+                                    if (uid) {
+                                        imap.addFlags(uid, ['\\Seen'], () => console.log('📬 Marked as read.'));
+                                    }
+                                } catch (ex) {
+                                    console.error('Error processing message:', ex);
+                                }
+                                msgResolve();
+                            });
+                        });
+
+                        messagePromises.push(msgPromise);
+                    });
+
+                    f.once('error', (err) => console.error('Fetch error:', err));
+
+                    f.once('end', async () => {
+                        await Promise.all(messagePromises);
+                        if (gotNewData) await sendSummary();
+                        imap.end();
+                        resolve();
+                    });
+                });
+            });
+        });
+
+        imap.connect();
+    });
 }
 
 // ─────────────────────────────────────────────
